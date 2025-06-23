@@ -363,6 +363,10 @@ class TransactionException(ExceptionBase):
     """
     Transaction causes block to go over blob gas limit.
     """
+    GAS_LIMIT_EXCEEDS_MAXIMUM = auto()
+    """
+    Transaction gas limit exceeds the maximum allowed limit of 30 million.
+    """
     TYPE_3_TX_ZERO_BLOBS = auto()
     """
     Transaction is type 3, but has no blobs.
@@ -390,11 +394,6 @@ class TransactionException(ExceptionBase):
     TYPE_4_TX_PRE_FORK = auto()
     """
     Transaction type 4 included before activation fork.
-    """
-    INVALID_DEPOSIT_EVENT_LAYOUT = auto()
-    """
-    Transaction emits a `DepositEvent` in the deposit contract (EIP-6110), but the layout
-    of the event does not match the required layout.
     """
 
 
@@ -544,6 +543,10 @@ class BlockException(ExceptionBase):
     """
     Block withdrawals address is rlp of invalid address != 20 bytes.
     """
+    RLP_BLOCK_LIMIT_EXCEEDED = auto()
+    """
+    Block's rlp encoding is larger than the allowed limit.
+    """
     INVALID_REQUESTS = auto()
     """
     Block's requests are invalid.
@@ -599,6 +602,11 @@ class BlockException(ExceptionBase):
     INVALID_BLOCK_HASH = auto()
     """
     Block header's hash does not match the actually computed hash of the block.
+    """
+    INVALID_DEPOSIT_EVENT_LAYOUT = auto()
+    """
+    Transaction emits a `DepositEvent` in the deposit contract (EIP-6110), but the layout
+    of the event does not match the required layout.
     """
 
 
@@ -800,11 +808,11 @@ class EOFException(ExceptionBase):
     """
     INVALID_CODE_SECTION_INDEX = auto()
     """
-    CALLF Operation referes to a non-existent code section
+    CALLF Operation refers to a non-existent code section
     """
     UNEXPECTED_HEADER_KIND = auto()
     """
-    Header parsing encounterd a section kind it wasn't expecting
+    Header parsing encountered a section kind it wasn't expecting
     """
     CALLF_TO_NON_RETURNING = auto()
     """

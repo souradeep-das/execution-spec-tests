@@ -61,7 +61,7 @@ class BesuTransitionTool(TransitionTool):
     def start_server(self):
         """
         Start the t8n-server process, extract the port, and leave it running
-        for future re-use.
+        for future reuse.
         """
         args = [
             str(self.binary),
@@ -106,7 +106,6 @@ class BesuTransitionTool(TransitionTool):
         chain_id: int,
         reward: int,
         blob_schedule: BlobSchedule | None = None,
-        eips: Optional[List[int]] = None,
         debug_output_path: str = "",
         state_test: bool = False,
         slow_request: bool = False,
@@ -119,8 +118,6 @@ class BesuTransitionTool(TransitionTool):
             block_number=env.number,
             timestamp=env.timestamp,
         )
-        if eips is not None:
-            fork_name = "+".join([fork_name] + [str(eip) for eip in eips])
 
         input_json = TransitionToolInput(
             alloc=alloc,
@@ -265,6 +262,10 @@ class BesuExceptionMapper(ExceptionMapper):
             "Payload BlobGasUsed does not match calculated BlobGasUsed"
         ),
         BlockException.INVALID_GAS_USED_ABOVE_LIMIT: "Header validation failed (FULL)",
+        BlockException.RLP_BLOCK_LIMIT_EXCEEDED: (
+            # TODO:
+            ""
+        ),
         # TODO EVMONE needs to differentiate when the section is missing in the header or body
         EOFException.MISSING_STOP_OPCODE: "err: no_terminating_instruction",
         EOFException.MISSING_CODE_HEADER: "err: code_section_missing",
@@ -320,6 +321,11 @@ class BesuExceptionMapper(ExceptionMapper):
         BlockException.SYSTEM_CONTRACT_EMPTY: (
             r"(Invalid system call, no code at address)|" r"(Invalid system call address:)"
         ),
+        BlockException.INVALID_DEPOSIT_EVENT_LAYOUT: (
+            r"Invalid (amount|index|pubKey|signature|withdrawalCred) (offset|size): "
+            r"expected (\d+), but got (-?\d+)|"
+            r"Invalid deposit log length\. Must be \d+ bytes, but is \d+ bytes"
+        ),
         TransactionException.INITCODE_SIZE_EXCEEDED: (
             r"transaction invalid Initcode size of \d+ exceeds maximum size of \d+"
         ),
@@ -340,9 +346,7 @@ class BesuExceptionMapper(ExceptionMapper):
         TransactionException.NONCE_MISMATCH_TOO_LOW: (
             r"transaction invalid transaction nonce \d+ below sender account nonce \d+"
         ),
-        TransactionException.INVALID_DEPOSIT_EVENT_LAYOUT: (
-            r"Invalid (amount|index|pubKey|signature|withdrawalCred) (offset|size): "
-            r"expected (\d+), but got (-?\d+)|"
-            r"Invalid deposit log length\. Must be \d+ bytes, but is \d+ bytes"
+        TransactionException.GAS_LIMIT_EXCEEDS_MAXIMUM: (
+            r"transaction invalid Transaction gas limit must be at most \d+"
         ),
     }

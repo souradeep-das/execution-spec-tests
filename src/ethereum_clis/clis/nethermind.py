@@ -360,7 +360,11 @@ class NethermindExceptionMapper(ExceptionMapper):
         BlockException.INVALID_GAS_USED_ABOVE_LIMIT: (
             "ExceededGasLimit: Gas used exceeds gas limit."
         ),
-        TransactionException.INVALID_DEPOSIT_EVENT_LAYOUT: (
+        BlockException.RLP_BLOCK_LIMIT_EXCEEDED: (
+            # TODO:
+            ""
+        ),
+        BlockException.INVALID_DEPOSIT_EVENT_LAYOUT: (
             "DepositsInvalid: Invalid deposit event layout:"
         ),
     }
@@ -376,6 +380,9 @@ class NethermindExceptionMapper(ExceptionMapper):
         TransactionException.TYPE_3_TX_BLOB_COUNT_EXCEEDED: (
             r"BlockBlobGasExceeded: A block cannot have more than \d+ blob gas, blobs count \d+, "
             r"blobs gas used: \d+"
+        ),
+        TransactionException.GAS_LIMIT_EXCEEDS_MAXIMUM: (
+            r"TxGasLimitCapExceeded: Gas limit \d+ \w+ cap of \d+\.?"
         ),
         BlockException.INCORRECT_EXCESS_BLOB_GAS: (
             r"HeaderExcessBlobGasMismatch: Excess blob gas in header does not match calculated"

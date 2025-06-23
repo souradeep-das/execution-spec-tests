@@ -27,15 +27,19 @@ from ethereum_test_tools import (
     Transaction,
     add_kzg_version,
 )
-from ethereum_test_tools.code.generators import While
 from ethereum_test_tools.vm.opcode import Opcodes as Op
 from ethereum_test_types import TransactionType
 from ethereum_test_vm.opcode import Opcode
+from tests.byzantium.eip198_modexp_precompile.test_modexp import ModExpInput
 from tests.cancun.eip4844_blobs.spec import Spec as BlobsSpec
 from tests.istanbul.eip152_blake2.common import Blake2bInput
 from tests.istanbul.eip152_blake2.spec import Spec as Blake2bSpec
+from tests.osaka.eip7951_p256verify_precompiles import spec as p256verify_spec
+from tests.osaka.eip7951_p256verify_precompiles.spec import FieldElement
 from tests.prague.eip2537_bls_12_381_precompiles import spec as bls12381_spec
 from tests.prague.eip2537_bls_12_381_precompiles.spec import BytesConcatenation
+
+from .helpers import code_loop_precompile_call
 
 REFERENCE_SPEC_GIT_PATH = "TODO"
 REFERENCE_SPEC_VERSION = "TODO"
@@ -82,22 +86,22 @@ def make_dup(index: int) -> Opcode:
 def test_worst_zero_param(
     state_test: StateTestFiller,
     pre: Alloc,
-    fork: Fork,
     opcode: Op,
+    fork: Fork,
 ):
     """Test running a block with as many zero-parameter opcodes as possible."""
     env = Environment()
-    max_code_size = fork.max_code_size()
 
-    code_prefix = Op.JUMPDEST
-    iter_loop = Op.POP(opcode)
-    code_suffix = Op.PUSH0 + Op.JUMP
-    code_iter_len = (max_code_size - len(code_prefix) - len(code_suffix)) // len(iter_loop)
-    code = code_prefix + iter_loop * code_iter_len + code_suffix
-    assert len(code) <= max_code_size
+    opcode_sequence = opcode * fork.max_stack_height()
+    target_contract_address = pre.deploy_contract(code=opcode_sequence)
+
+    calldata = Bytecode()
+    attack_block = Op.POP(Op.STATICCALL(Op.GAS, target_contract_address, 0, 0, 0, 0))
+    code = code_loop_precompile_call(calldata, attack_block, fork)
+    code_address = pre.deploy_contract(code=code)
 
     tx = Transaction(
-        to=pre.deploy_contract(code=bytes(code)),
+        to=code_address,
         gas_limit=env.gas_limit,
         sender=pre.fund_eoa(),
     )
@@ -309,18 +313,20 @@ def test_worst_msize(
     The `mem_size` parameter indicates by how much the memory is expanded.
     """
     env = Environment()
-    max_code_size = fork.max_code_size()
+    max_stack_height = fork.max_stack_height()
 
-    # We use CALLVALUE for the parameter since is 1 gas cheaper than PUSHX.
-    code_prefix = Op.MLOAD(Op.CALLVALUE) + Op.JUMPDEST
-    iter_loop = Op.POP(Op.MSIZE)
-    code_suffix = Op.JUMP(len(code_prefix) - 1)
-    code_iter_len = (max_code_size - len(code_prefix) - len(code_suffix)) // len(iter_loop)
-    code = code_prefix + iter_loop * code_iter_len + code_suffix
-    assert len(code) <= max_code_size
+    code_sequence = Op.MLOAD(Op.CALLVALUE) + Op.POP + Op.MSIZE * max_stack_height
+    target_address = pre.deploy_contract(code=code_sequence)
+
+    calldata = Bytecode()
+    attack_block = Op.POP(Op.STATICCALL(Op.GAS, target_address, 0, 0, 0, 0))
+    code = code_loop_precompile_call(calldata, attack_block, fork)
+    assert len(code) <= fork.max_code_size()
+
+    code_address = pre.deploy_contract(code=code)
 
     tx = Transaction(
-        to=pre.deploy_contract(code=bytes(code)),
+        to=code_address,
         gas_limit=env.gas_limit,
         sender=pre.fund_eoa(),
         value=mem_size,
@@ -363,7 +369,7 @@ def test_worst_keccak(
             + math.ceil(i / 32) * gsc.G_KECCAK_256_WORD  # KECCAK256 dynamic cost
             + gsc.G_BASE  # POP
         )
-        # From the available gas, we substract the mem expansion costs considering we know the
+        # From the available gas, we subtract the mem expansion costs considering we know the
         # current input size length i.
         available_gas_after_expansion = max(0, available_gas - mem_exp_gas_calculator(new_bytes=i))
         # Calculate how many calls we can do.
@@ -458,7 +464,7 @@ def test_worst_precompile_only_data_input(
             + math.ceil(input_length / 32) * per_word_dynamic_cost  # Precompile dynamic cost
             + gsc.G_BASE  # POP
         )
-        # From the available gas, we substract the mem expansion costs considering we know the
+        # From the available gas, we subtract the mem expansion costs considering we know the
         # current input size length.
         available_gas_after_expansion = max(
             0, available_gas - mem_exp_gas_calculator(new_bytes=input_length)
@@ -493,40 +499,109 @@ def test_worst_precompile_only_data_input(
 
 
 @pytest.mark.valid_from("Cancun")
-def test_worst_modexp(state_test: StateTestFiller, pre: Alloc, fork: Fork):
-    """Test running a block with as many MODEXP calls as possible."""
-    env = Environment()
+@pytest.mark.parametrize(
+    ["mod_exp_input"],
+    [
+        pytest.param(
+            ModExpInput(
+                base=8 * "ff",
+                exponent=112 * "ff",
+                modulus=7 * "ff" + "00",
+            ),
+            id="mod_even_8b_exp_896",
+        ),
+        pytest.param(
+            ModExpInput(
+                base=16 * "ff",
+                exponent=40 * "ff",
+                modulus=15 * "ff" + "00",
+            ),
+            id="mod_even_16b_exp_320",
+        ),
+        pytest.param(
+            ModExpInput(
+                base=24 * "ff",
+                exponent=21 * "ff",
+                modulus=23 * "ff" + "00",
+            ),
+            id="mod_even_24b_exp_168",
+        ),
+        pytest.param(
+            ModExpInput(
+                base=32 * "ff",
+                exponent=5 * "ff",
+                modulus=31 * "ff" + "00",
+            ),
+            id="mod_even_32b_exp_40",
+        ),
+        pytest.param(
+            ModExpInput(
+                base=32 * "ff",
+                exponent=12 * "ff",
+                modulus=31 * "ff" + "00",
+            ),
+            id="mod_even_32b_exp_96",
+        ),
+        pytest.param(
+            ModExpInput(
+                base=32 * "ff",
+                exponent=32 * "ff",
+                modulus=31 * "ff" + "00",
+            ),
+            id="mod_even_32b_exp_256",
+        ),
+        pytest.param(
+            ModExpInput(
+                base=32 * "ff",
+                exponent=12 * "ff",
+                modulus=31 * "ff" + "01",
+            ),
+            id="mod_odd_32b_exp_96",
+        ),
+        pytest.param(
+            ModExpInput(
+                base=32 * "ff",
+                exponent=32 * "ff",
+                modulus=31 * "ff" + "01",
+            ),
+            id="mod_odd_32b_exp_256",
+        ),
+        pytest.param(
+            ModExpInput(
+                base=32 * "ff",
+                exponent=8 * "12345670",
+                modulus=31 * "ff" + "01",
+            ),
+            id="mod_odd_32b_exp_cover_windows",
+        ),
+    ],
+)
+def test_worst_modexp(
+    state_test: StateTestFiller,
+    pre: Alloc,
+    fork: Fork,
+    mod_exp_input: ModExpInput,
+):
+    """
+    Test running a block with as many calls to the MODEXP (5) precompile as possible.
+    All the calls have the same parametrized input.
+    """
+    # Skip the trailing zeros from the input to make EVM work even harder.
+    calldata = bytes(mod_exp_input).rstrip(b"\x00")
 
-    base_mod_length = 32
-    exp_length = 32
-
-    base = 2 ** (8 * base_mod_length) - 1
-    mod = 2 ** (8 * base_mod_length) - 2  # Prevents base == mod
-    exp = 2 ** (8 * exp_length) - 1
-
-    # MODEXP calldata
-    calldata = (
-        Op.MSTORE(0 * 32, base_mod_length)
-        + Op.MSTORE(1 * 32, exp_length)
-        + Op.MSTORE(2 * 32, base_mod_length)
-        + Op.MSTORE(3 * 32, base)
-        + Op.MSTORE(4 * 32, exp)
-        + Op.MSTORE(5 * 32, mod)
+    code = code_loop_precompile_call(
+        Op.CALLDATACOPY(0, 0, Op.CALLDATASIZE),  # Copy the input to the memory.
+        Op.POP(Op.STATICCALL(Op.GAS, 0x5, Op.PUSH0, Op.CALLDATASIZE, Op.PUSH0, Op.PUSH0)),
+        fork,
     )
 
-    # EIP-2565
-    mul_complexity = math.ceil(base_mod_length / 8) ** 2
-    iter_complexity = exp.bit_length() - 1
-    gas_cost = math.floor((mul_complexity * iter_complexity) / 3)
-    attack_block = Op.POP(Op.STATICCALL(gas_cost, 0x5, 0, 32 * 6, 0, 0))
-    code = code_loop_precompile_call(calldata, attack_block, fork)
-
-    code_address = pre.deploy_contract(code=code)
+    env = Environment()
 
     tx = Transaction(
-        to=code_address,
+        to=pre.deploy_contract(code=code),
         gas_limit=env.gas_limit,
         sender=pre.fund_eoa(),
+        input=calldata,
     )
 
     state_test(
@@ -652,7 +727,7 @@ def test_worst_modexp(state_test: StateTestFiller, pre: Alloc, fork: Fork):
             [
                 # TODO: the //2 is required due to a limitation of the max contract size limit.
                 # In a further iteration we can insert the inputs as calldata or storage and avoid
-                # having to do PUSHes which has this limtiation. This also applies to G1MSM.
+                # having to do PUSHes which has this limitation. This also applies to G1MSM.
                 (bls12381_spec.Spec.P2 + bls12381_spec.Scalar(bls12381_spec.Spec.Q))
                 * (len(bls12381_spec.Spec.G2MSM_DISCOUNT_TABLE) // 2),
             ],
@@ -680,6 +755,17 @@ def test_worst_modexp(state_test: StateTestFiller, pre: Alloc, fork: Fork):
             ],
             id="bls12_fp_to_g2",
         ),
+        pytest.param(
+            p256verify_spec.Spec.P256VERIFY,
+            [
+                p256verify_spec.Spec.H0,
+                p256verify_spec.Spec.R0,
+                p256verify_spec.Spec.S0,
+                p256verify_spec.Spec.X0,
+                p256verify_spec.Spec.Y0,
+            ],
+            id="p256verify",
+        ),
     ],
 )
 @pytest.mark.slow()
@@ -693,20 +779,23 @@ def test_worst_precompile_fixed_cost(
     """Test running a block filled with a precompile with fixed cost."""
     env = Environment()
 
+    if precompile_address not in fork.precompiles():
+        pytest.skip("Precompile not enabled")
+
     concatenated_bytes: bytes
     if all(isinstance(p, str) for p in parameters):
         parameters_str = cast(list[str], parameters)
         concatenated_hex_string = "".join(parameters_str)
         concatenated_bytes = bytes.fromhex(concatenated_hex_string)
-    elif all(isinstance(p, (bytes, BytesConcatenation)) for p in parameters):
+    elif all(isinstance(p, (bytes, BytesConcatenation, FieldElement)) for p in parameters):
         parameters_bytes_list = [
-            bytes(p) for p in cast(list[BytesConcatenation | bytes], parameters)
+            bytes(p) for p in cast(list[BytesConcatenation | bytes | FieldElement], parameters)
         ]
         concatenated_bytes = b"".join(parameters_bytes_list)
     else:
         raise TypeError(
             "parameters must be a list of strings (hex) "
-            "or a list of byte-like objects (bytes or BytesConcatenation)."
+            "or a list of byte-like objects (bytes, BytesConcatenation or FieldElement)."
         )
 
     padding_length = (32 - (len(concatenated_bytes) % 32)) % 32
@@ -738,48 +827,18 @@ def test_worst_precompile_fixed_cost(
     )
 
 
-def code_loop_precompile_call(calldata: Bytecode, attack_block: Bytecode, fork: Fork):
-    """Create a code loop that calls a precompile with the given calldata."""
-    max_code_size = fork.max_code_size()
-
-    # The attack contract is: CALLDATA_PREP + #JUMPDEST + [attack_block]* + JUMP(#)
-    jumpdest = Op.JUMPDEST
-    jump_back = Op.JUMP(len(calldata))
-    max_iters_loop = (max_code_size - len(calldata) - len(jumpdest) - len(jump_back)) // len(
-        attack_block
-    )
-    code = calldata + jumpdest + sum([attack_block] * max_iters_loop) + jump_back
-    if len(code) > max_code_size:
-        # Must never happen, but keep it as a sanity check.
-        raise ValueError(f"Code size {len(code)} exceeds maximum code size {max_code_size}")
-
-    return code
-
-
 @pytest.mark.zkevm
 @pytest.mark.valid_from("Cancun")
 @pytest.mark.slow
-def test_worst_jumps(state_test: StateTestFiller, pre: Alloc, fork: Fork):
+def test_worst_jumps(state_test: StateTestFiller, pre: Alloc):
     """Test running a JUMP-intensive contract."""
     env = Environment()
-    max_code_size = fork.max_code_size()
 
-    def jump_seq():
-        return Op.JUMP(Op.ADD(Op.PC, 1)) + Op.JUMPDEST
-
-    bytes_per_seq = len(jump_seq())
-    seqs_per_call = max_code_size // bytes_per_seq
-
-    # Create and deploy the jump-intensive contract
-    jumps_code = sum([jump_seq() for _ in range(seqs_per_call)])
-    jumps_address = pre.deploy_contract(code=bytes(jumps_code))
-
-    # Call the contract repeatedly until gas runs out.
-    caller_code = While(body=Op.POP(Op.CALL(address=jumps_address)))
-    caller_address = pre.deploy_contract(caller_code)
+    jumps_code = Op.JUMPDEST + Op.JUMP(Op.PUSH0)
+    jumps_address = pre.deploy_contract(jumps_code)
 
     tx = Transaction(
-        to=caller_address,
+        to=jumps_address,
         gas_limit=env.gas_limit,
         sender=pre.fund_eoa(),
     )
@@ -801,15 +860,13 @@ def test_worst_jumpdests(state_test: StateTestFiller, pre: Alloc, fork: Fork):
     max_code_size = fork.max_code_size()
 
     # Create and deploy a contract with many JUMPDESTs
-    jumpdests_code = sum([Op.JUMPDEST] * max_code_size)
-    jumpdests_address = pre.deploy_contract(code=bytes(jumpdests_code))
-
-    # Call the contract repeatedly until gas runs out.
-    caller_code = While(body=Op.POP(Op.CALL(address=jumpdests_address)))
-    caller_address = pre.deploy_contract(caller_code)
+    code_suffix = Op.JUMP(Op.PUSH0)
+    code_body = Op.JUMPDEST * (max_code_size - len(code_suffix))
+    code = code_body + code_suffix
+    jumpdests_address = pre.deploy_contract(code=code)
 
     tx = Transaction(
-        to=caller_address,
+        to=jumpdests_address,
         gas_limit=env.gas_limit,
         sender=pre.fund_eoa(),
     )
@@ -1019,6 +1076,107 @@ def test_worst_unop(state_test: StateTestFiller, pre: Alloc, opcode: Op, fork: F
 
     tx = Transaction(
         to=pre.deploy_contract(code=code),
+        gas_limit=env.gas_limit,
+        sender=pre.fund_eoa(),
+    )
+
+    state_test(
+        env=env,
+        pre=pre,
+        post={},
+        tx=tx,
+    )
+
+
+@pytest.mark.valid_from("Cancun")
+# `key_mut` indicates the key isn't fixed.
+@pytest.mark.parametrize("key_mut", [True, False])
+# `val_mut` indicates that at the end of each big-loop, the value of the target key changes.
+@pytest.mark.parametrize("val_mut", [True, False])
+def test_worst_tload(
+    state_test: StateTestFiller,
+    fork: Fork,
+    pre: Alloc,
+    key_mut: bool,
+    val_mut: bool,
+):
+    """Test running a block with as many TLOAD calls as possible."""
+    env = Environment()
+    max_code_size = fork.max_code_size()
+
+    start_key = 41
+    code_key_mut = Bytecode()
+    code_val_mut = Bytecode()
+    if key_mut and val_mut:
+        code_prefix = Op.PUSH1(start_key) + Op.JUMPDEST
+        loop_iter = Op.POP(Op.TLOAD(Op.DUP1))
+        code_key_mut = Op.POP + Op.GAS
+        code_val_mut = Op.TSTORE(Op.DUP2, Op.GAS)
+    if key_mut and not val_mut:
+        code_prefix = Op.JUMPDEST
+        loop_iter = Op.POP(Op.TLOAD(Op.GAS))
+    if not key_mut and val_mut:
+        code_prefix = Op.JUMPDEST
+        loop_iter = Op.POP(Op.TLOAD(Op.CALLVALUE))
+        code_val_mut = Op.TSTORE(Op.CALLVALUE, Op.GAS)  # CALLVALUE configured in the tx
+    if not key_mut and not val_mut:
+        code_prefix = Op.JUMPDEST
+        loop_iter = Op.POP(Op.TLOAD(Op.CALLVALUE))
+
+    code_suffix = code_key_mut + code_val_mut + Op.JUMP(len(code_prefix) - 1)
+
+    code_body_len = (max_code_size - len(code_prefix) - len(code_suffix)) // len(loop_iter)
+    code_body = loop_iter * code_body_len
+    code = code_prefix + code_body + code_suffix
+    assert len(code) <= max_code_size
+
+    tx = Transaction(
+        to=pre.deploy_contract(code),
+        gas_limit=env.gas_limit,
+        sender=pre.fund_eoa(),
+        value=start_key if not key_mut and val_mut else 0,
+    )
+
+    state_test(
+        env=env,
+        pre=pre,
+        post={},
+        tx=tx,
+    )
+
+
+@pytest.mark.valid_from("Cancun")
+@pytest.mark.parametrize("key_mut", [True, False])
+@pytest.mark.parametrize("dense_val_mut", [True, False])
+def test_worst_tstore(
+    state_test: StateTestFiller,
+    fork: Fork,
+    pre: Alloc,
+    key_mut: bool,
+    dense_val_mut: bool,
+):
+    """Test running a block with as many TSTORE calls as possible."""
+    env = Environment()
+    max_code_size = fork.max_code_size()
+
+    init_key = 42
+    code_prefix = Op.PUSH1(init_key) + Op.JUMPDEST
+
+    # If `key_mut` is True, we mutate the key on every iteration of the big loop.
+    code_key_mut = Op.POP + Op.GAS if key_mut else Bytecode()
+    code_suffix = code_key_mut + Op.JUMP(len(code_prefix) - 1)
+
+    # If `dense_val_mut` is set, we use GAS as a cheap way of always storing a different value than
+    # the previous one.
+    loop_iter = Op.TSTORE(Op.DUP2, Op.GAS if dense_val_mut else Op.DUP1)
+
+    code_body_len = (max_code_size - len(code_prefix) - len(code_suffix)) // len(loop_iter)
+    code_body = loop_iter * code_body_len
+    code = code_prefix + code_body + code_suffix
+    assert len(code) <= max_code_size
+
+    tx = Transaction(
+        to=pre.deploy_contract(code),
         gas_limit=env.gas_limit,
         sender=pre.fund_eoa(),
     )
@@ -1594,6 +1752,184 @@ def test_worst_calldataload(
     tx = Transaction(
         to=pre.deploy_contract(code=code),
         data=calldata,
+        gas_limit=env.gas_limit,
+        sender=pre.fund_eoa(),
+    )
+
+    state_test(
+        env=env,
+        pre=pre,
+        post={},
+        tx=tx,
+    )
+
+
+@pytest.mark.parametrize(
+    "opcode",
+    [
+        Op.SWAP1,
+        Op.SWAP2,
+        Op.SWAP3,
+        Op.SWAP4,
+        Op.SWAP5,
+        Op.SWAP6,
+        Op.SWAP7,
+        Op.SWAP8,
+        Op.SWAP9,
+        Op.SWAP10,
+        Op.SWAP11,
+        Op.SWAP12,
+        Op.SWAP13,
+        Op.SWAP14,
+        Op.SWAP15,
+        Op.SWAP16,
+    ],
+)
+def test_worst_swap(
+    state_test: StateTestFiller,
+    pre: Alloc,
+    fork: Fork,
+    opcode: Opcode,
+):
+    """Test running a block with as many SWAP as possible."""
+    env = Environment()
+    max_code_size = fork.max_code_size()
+
+    code_prefix = Op.JUMPDEST + Op.PUSH0 * opcode.min_stack_height
+    code_suffix = Op.PUSH0 + Op.JUMP
+    opcode_sequence = opcode * (max_code_size - len(code_prefix) - len(code_suffix))
+    code = code_prefix + opcode_sequence + code_suffix
+    assert len(code) <= max_code_size
+
+    tx = Transaction(
+        to=pre.deploy_contract(code=code),
+        gas_limit=env.gas_limit,
+        sender=pre.fund_eoa(),
+    )
+
+    state_test(
+        env=env,
+        pre=pre,
+        post={},
+        tx=tx,
+    )
+
+
+@pytest.mark.parametrize(
+    "opcode",
+    [
+        pytest.param(Op.DUP1),
+        pytest.param(Op.DUP2),
+        pytest.param(Op.DUP3),
+        pytest.param(Op.DUP4),
+        pytest.param(Op.DUP5),
+        pytest.param(Op.DUP6),
+        pytest.param(Op.DUP7),
+        pytest.param(Op.DUP8),
+        pytest.param(Op.DUP9),
+        pytest.param(Op.DUP10),
+        pytest.param(Op.DUP11),
+        pytest.param(Op.DUP12),
+        pytest.param(Op.DUP13),
+        pytest.param(Op.DUP14),
+        pytest.param(Op.DUP15),
+        pytest.param(Op.DUP16),
+    ],
+)
+def test_worst_dup(
+    state_test: StateTestFiller,
+    pre: Alloc,
+    fork: Fork,
+    opcode: Op,
+):
+    """Test running a block with as many DUP as possible."""
+    env = Environment()
+    max_stack_height = fork.max_stack_height()
+
+    min_stack_height = opcode.min_stack_height
+    code_prefix = Op.PUSH0 * min_stack_height
+    opcode_sequence = opcode * (max_stack_height - min_stack_height)
+    target_contract_address = pre.deploy_contract(code=code_prefix + opcode_sequence)
+
+    calldata = Bytecode()
+    attack_block = Op.POP(Op.STATICCALL(Op.GAS, target_contract_address, 0, 0, 0, 0))
+
+    code = code_loop_precompile_call(calldata, attack_block, fork)
+    code_address = pre.deploy_contract(code=code)
+
+    tx = Transaction(
+        to=code_address,
+        gas_limit=env.gas_limit,
+        sender=pre.fund_eoa(),
+    )
+
+    state_test(
+        env=env,
+        pre=pre,
+        post={},
+        tx=tx,
+    )
+
+
+@pytest.mark.parametrize(
+    "opcode",
+    [
+        pytest.param(Op.PUSH0),
+        pytest.param(Op.PUSH1),
+        pytest.param(Op.PUSH2),
+        pytest.param(Op.PUSH3),
+        pytest.param(Op.PUSH4),
+        pytest.param(Op.PUSH5),
+        pytest.param(Op.PUSH6),
+        pytest.param(Op.PUSH7),
+        pytest.param(Op.PUSH8),
+        pytest.param(Op.PUSH9),
+        pytest.param(Op.PUSH10),
+        pytest.param(Op.PUSH11),
+        pytest.param(Op.PUSH12),
+        pytest.param(Op.PUSH13),
+        pytest.param(Op.PUSH14),
+        pytest.param(Op.PUSH15),
+        pytest.param(Op.PUSH16),
+        pytest.param(Op.PUSH17),
+        pytest.param(Op.PUSH18),
+        pytest.param(Op.PUSH19),
+        pytest.param(Op.PUSH20),
+        pytest.param(Op.PUSH21),
+        pytest.param(Op.PUSH22),
+        pytest.param(Op.PUSH23),
+        pytest.param(Op.PUSH24),
+        pytest.param(Op.PUSH25),
+        pytest.param(Op.PUSH26),
+        pytest.param(Op.PUSH27),
+        pytest.param(Op.PUSH28),
+        pytest.param(Op.PUSH29),
+        pytest.param(Op.PUSH30),
+        pytest.param(Op.PUSH31),
+        pytest.param(Op.PUSH32),
+    ],
+)
+def test_worst_push(
+    state_test: StateTestFiller,
+    pre: Alloc,
+    fork: Fork,
+    opcode: Op,
+):
+    """Test running a block with as many PUSH as possible."""
+    env = Environment()
+
+    op = opcode[1] if opcode.has_data_portion() else opcode
+    opcode_sequence = op * fork.max_stack_height()
+    target_contract_address = pre.deploy_contract(code=opcode_sequence)
+
+    calldata = Bytecode()
+    attack_block = Op.POP(Op.STATICCALL(Op.GAS, target_contract_address, 0, 0, 0, 0))
+
+    code = code_loop_precompile_call(calldata, attack_block, fork)
+    code_address = pre.deploy_contract(code=code)
+
+    tx = Transaction(
+        to=code_address,
         gas_limit=env.gas_limit,
         sender=pre.fund_eoa(),
     )

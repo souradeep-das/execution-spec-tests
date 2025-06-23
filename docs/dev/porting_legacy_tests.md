@@ -2,7 +2,7 @@
 
 ## Background
 
-EEST is the successor to [ethereum/tests](https://github.com/ethereum/tests) (aka "original tests"), a repository that defined EVM test cases from the [Frontier](https://ethereum.org/en/history/#frontier) phase up to and including [The Merge](https://ethereum.org/en/history/#paris). These test cases are specified as YAML (and occasionally JSON) files in the [`./src/`](https://github.com/ethereum/tests/tree/develop/src) sub-directory. JSON test fixtures, which are fully-populated tests that can be executed against clients, are generated using [ethereum/retesteth](https://github.com/ethereum/retesteth). These JSON artifacts are regenerated when needed and added to the repository, typically in the [`./GeneralStateTests/`](https://github.com/ethereum/tests/tree/develop/GeneralStateTests) sub-directory.
+EEST is the successor to [ethereum/tests](https://github.com/ethereum/tests) (aka "original tests"), a repository that defined EVM test cases from the [Frontier](https://ethereum.org/en/history/#frontier) phase up to and including [The Merge](https://ethereum.org/en/history/#paris). These test cases are specified as YAML (and occasionally JSON) files in the [`./src/`](https://github.com/ethereum/tests/tree/develop/src) sub-directory. JSON test fixtures, which are fully-populated tests that can be executed against clients, are generated using [ethereum/retesteth](https://github.com/ethereum/retesteth). These JSON artifacts are regenerated when needed and added to the repository, typically in the [`tests/static/state_tests`](https://github.com/ethereum/execution-spec-tests/tree/main/tests/static/state_tests) sub-directory.
 
 From [Shanghai](https://ethereum.org/en/history/#shapella) onward, new test cases — especially for new features introduced in hard forks—are defined in Python within EEST. While the existing test cases remain important for client testing, porting ethereum/tests to EEST will help maintain and generate tests for newer forks. This also ensures feature parity, as client teams will only need to obtain test fixture releases from one source.
 
@@ -88,3 +88,22 @@ Follow the hyperlinks for lost base coverage (`LBC`) to address coverage gaps. H
     Also note that yul tests and possibly other tests used `CALLDATALOAD` that might no longer needed when designing a test with python. But we must always investigate if an opcode is not covered anymore to see if its okay.
 
     For example, review the [discussion in this PR.](https://github.com/ethereum/execution-spec-tests/pull/975#issuecomment-2528792289)
+
+## Resolving Coverage Gaps from Yul Compilation
+
+When porting tests from ethereum/tests, you may encounter coverage gaps that are false positives. This commonly occurs because:
+
+- **Original tests** often used Yul to define smart contracts, and solc compilation introduces additional opcodes that aren't specifically under test
+- **EEST ports** typically use the explicit EEST Opcode mini-language, which is more precise in opcode definition
+
+If coverage analysis shows missing opcodes that were only present due to Yul compilation artifacts (not the actual feature being tested), this can be resolved during PR review by adding the `coverage_missed_reason` parameter:
+
+```python
+@pytest.mark.ported_from(
+    ["path/to/original_test.json"],
+    coverage_missed_reason="Missing opcodes are Yul compilation artifacts, not part of tested feature"
+)
+```
+
+!!! note "Add coverage_missed_reason only after PR review"
+    Only add `coverage_missed_reason` after PR review determines the coverage gap is acceptable, never preemptively. This helps maintain test coverage integrity while accounting for legitimate differences between Yul-based and EEST opcode-based implementations.

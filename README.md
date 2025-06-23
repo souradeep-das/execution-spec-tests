@@ -21,25 +21,25 @@ flowchart LR
   style H stroke:#F9A825,stroke-width:2px
   
   subgraph "ethereum/go-ethereum, ..."
-    C[<code>evm t8n</code>\nexternal executable]
+    C[<code>evm t8n</code><br/>external executable]
   end
 
   subgraph ethereum/solidity
-    D[<code>solc</code>\nexternal executable]
+    D[<code>solc</code><br/>external executable]
   end
 
   subgraph ethereum/EIPs
-    E(<code>EIPS/EIP-*.md</code>\nSHA digest via Github API)
+    E(<code>EIPS/EIP-*.md</code><br/>SHA digest via Github API)
   end
 
   subgraph "ethereum/execution-spec-tests"
-    A(<code>./tests/**/*.py</code>\nPython Test Cases)
-    B([<code>$ fill ./tests/</code>\nPython Framework])
+    A(<code>./tests/**/*.py</code><br/>Python Test Cases)
+    B([<code>$ fill ./tests/</code><br/>Python Framework])
   end
 
   subgraph Test Fixture Consumers
     subgraph ethereum/hive
-      G([<code>$ hive ...</code>\nGo Test Framework])
+      G([<code>$ hive ...</code><br/>Go Test Framework])
     end
     H([Client executables])
   end
@@ -161,7 +161,7 @@ By default, JSON test fixtures are generated from this repository's Python test 
 
 ## Usage
 
-More information on how to obtain and consume the [released test fixtures](https://github.com/ethereum/execution-spec-tests/releases) can be found in the [documentation](https://eest.ethereum.org/main/consuming_tests/).
+More information on how to obtain and consume the [released test fixtures](https://github.com/ethereum/execution-spec-tests/releases) can be found in the [documentation](https://eest.ethereum.org/main/running_tests/).
 
 For further help with working with this codebase, see the [online documentation](https://eest.ethereum.org/main/):
 

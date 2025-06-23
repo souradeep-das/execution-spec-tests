@@ -67,16 +67,23 @@ class GethExceptionMapper(ExceptionMapper):
         TransactionException.TYPE_4_TX_CONTRACT_CREATION: (
             "input string too short for common.Address, decoding into (types.SetCodeTx).To"
         ),
+        TransactionException.GAS_LIMIT_EXCEEDS_MAXIMUM: (
+            "transaction exceeds maximum allowed gas limit"
+        ),
         TransactionException.TYPE_4_TX_PRE_FORK: ("transaction type not supported"),
         TransactionException.INITCODE_SIZE_EXCEEDED: "max initcode size exceeded",
         TransactionException.NONCE_MISMATCH_TOO_LOW: "nonce too low",
-        TransactionException.INVALID_DEPOSIT_EVENT_LAYOUT: "unable to parse deposit data",
+        BlockException.INVALID_DEPOSIT_EVENT_LAYOUT: "unable to parse deposit data",
         BlockException.INCORRECT_BLOB_GAS_USED: "blob gas used mismatch",
         BlockException.INCORRECT_EXCESS_BLOB_GAS: "invalid excessBlobGas",
         BlockException.INVALID_VERSIONED_HASHES: "invalid number of versionedHashes",
         BlockException.INVALID_REQUESTS: "invalid requests hash",
         BlockException.SYSTEM_CONTRACT_CALL_FAILED: "system call failed to execute:",
         BlockException.INVALID_BLOCK_HASH: "blockhash mismatch",
+        BlockException.RLP_BLOCK_LIMIT_EXCEEDED: (
+            # TODO:
+            ""
+        ),
         # TODO EVMONE needs to differentiate when the section is missing in the header or body
         EOFException.MISSING_STOP_OPCODE: "err: no_terminating_instruction",
         EOFException.MISSING_CODE_HEADER: "err: code_section_missing",

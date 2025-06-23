@@ -23,8 +23,17 @@ from cli.gen_index import generate_fixtures_index
 from config import AppConfig
 from ethereum_clis import TransitionTool
 from ethereum_clis.clis.geth import FixtureConsumerTool
-from ethereum_test_base_types import Alloc, ReferenceSpec
-from ethereum_test_fixtures import BaseFixture, FixtureCollector, FixtureConsumer, TestInfo
+from ethereum_test_base_types import Account, Address, Alloc, ReferenceSpec
+from ethereum_test_fixtures import (
+    BaseFixture,
+    BlockchainEngineXFixture,
+    FixtureCollector,
+    FixtureConsumer,
+    LabeledFixtureFormat,
+    PreAllocGroup,
+    PreAllocGroups,
+    TestInfo,
+)
 from ethereum_test_forks import Fork, get_transition_fork_predecessor, get_transition_forks
 from ethereum_test_specs import BaseTest
 from ethereum_test_tools.utility.versioning import (
@@ -40,6 +49,53 @@ from ..shared.helpers import (
 )
 from ..spec_version_checker.spec_version_checker import get_ref_spec_from_module
 from .fixture_output import FixtureOutput
+
+
+def calculate_post_state_diff(post_state: Alloc, genesis_state: Alloc) -> Alloc:
+    """
+    Calculate the state difference between post_state and genesis_state.
+
+    This function enables significant space savings in Engine X fixtures by storing
+    only the accounts that changed during test execution, rather than the full
+    post-state which may contain thousands of unchanged accounts.
+
+    Returns an Alloc containing only the accounts that:
+    - Changed between genesis and post state (balance, nonce, storage, code)
+    - Were created during test execution (new accounts)
+    - Were deleted during test execution (represented as None)
+
+    Args:
+        post_state: Final state after test execution
+        genesis_state: Genesis pre-allocation state
+
+    Returns:
+        Alloc containing only the state differences for efficient storage
+
+    """
+    diff: Dict[Address, Account | None] = {}
+
+    # Find all addresses that exist in either state
+    all_addresses = set(post_state.root.keys()) | set(genesis_state.root.keys())
+
+    for address in all_addresses:
+        genesis_account = genesis_state.root.get(address)
+        post_account = post_state.root.get(address)
+
+        # Account was deleted (exists in genesis but not in post)
+        if genesis_account is not None and post_account is None:
+            diff[address] = None
+
+        # Account was created (doesn't exist in genesis but exists in post)
+        elif genesis_account is None and post_account is not None:
+            diff[address] = post_account
+
+        # Account was modified (exists in both but different)
+        elif genesis_account != post_account:
+            diff[address] = post_account
+
+        # Account unchanged - don't include in diff
+
+    return Alloc(diff)
 
 
 def default_output_directory() -> str:
@@ -185,6 +241,20 @@ def pytest_addoption(parser: pytest.Parser):
             f"consume an entire block's gas. (Default: {EnvironmentDefaults.gas_limit})"
         ),
     )
+    test_group.addoption(
+        "--generate-pre-alloc-groups",
+        action="store_true",
+        dest="generate_pre_alloc_groups",
+        default=False,
+        help="Generate pre-allocation groups (phase 1 only).",
+    )
+    test_group.addoption(
+        "--use-pre-alloc-groups",
+        action="store_true",
+        dest="use_pre_alloc_groups",
+        default=False,
+        help="Fill tests using existing pre-allocation groups (phase 2 only).",
+    )
 
     debug_group = parser.getgroup("debug", "Arguments defining debug behavior")
     debug_group.addoption(
@@ -206,6 +276,32 @@ def pytest_addoption(parser: pytest.Parser):
         default=False,
         help=("Skip dumping the the transition tool debug output."),
     )
+
+
+def pytest_sessionstart(session: pytest.Session):
+    """
+    Initialize session-level state.
+
+    Either initialize an empty pre-allocation groups container for phase 1 or
+    load the pre-allocation groups for phase 2 execution.
+    """
+    # Initialize empty pre-allocation groups container for phase 1
+    if session.config.getoption("generate_pre_alloc_groups"):
+        session.config.pre_alloc_groups = PreAllocGroups(root={})  # type: ignore[attr-defined]
+
+    # Load the pre-allocation groups for phase 2
+    if session.config.getoption("use_pre_alloc_groups"):
+        pre_alloc_groups_folder = session.config.fixture_output.pre_alloc_groups_folder_path  # type: ignore[attr-defined]
+        if pre_alloc_groups_folder.exists():
+            session.config.pre_alloc_groups = PreAllocGroups.from_folder(  # type: ignore[attr-defined]
+                pre_alloc_groups_folder
+            )
+        else:
+            pytest.exit(
+                f"Pre-allocation groups folder not found: {pre_alloc_groups_folder}. "
+                "Run phase 1 with --generate-pre-alloc-groups first.",
+                returncode=pytest.ExitCode.USAGE_ERROR,
+            )
 
 
 @pytest.hookimpl(tryfirst=True)
@@ -240,8 +336,11 @@ def pytest_configure(config):
     except ValueError as e:
         pytest.exit(str(e), returncode=pytest.ExitCode.USAGE_ERROR)
 
-    if not config.getoption("disable_html") and config.getoption("htmlpath") is None:
-        # generate an html report by default, unless explicitly disabled
+    if (
+        not config.getoption("disable_html")
+        and config.getoption("htmlpath") is None
+        and not config.getoption("generate_pre_alloc_groups")
+    ):
         config.option.htmlpath = config.fixture_output.directory / default_html_report_file_path()
 
     # Instantiate the transition tool here to check that the binary path/trace option is valid.
@@ -312,21 +411,49 @@ def pytest_terminal_summary(
     actually run the tests.
     """
     yield
-    if config.fixture_output.is_stdout:  # type: ignore[attr-defined]
+    if config.fixture_output.is_stdout or hasattr(config, "workerinput"):  # type: ignore[attr-defined]
         return
     stats = terminalreporter.stats
     if "passed" in stats and stats["passed"]:
-        # append / to indicate this is a directory
-        output_dir = str(config.fixture_output.directory) + "/"  # type: ignore[attr-defined]
-        terminalreporter.write_sep(
-            "=",
-            (
-                f' No tests executed - the test fixtures in "{output_dir}" may now be executed '
-                "against a client "
-            ),
-            bold=True,
-            yellow=True,
-        )
+        # Custom message for Phase 1 (pre-allocation group generation)
+        if config.getoption("generate_pre_alloc_groups"):
+            # Generate summary stats
+            pre_alloc_groups: PreAllocGroups
+            if config.pluginmanager.hasplugin("xdist"):
+                # Load pre-allocation groups from disk
+                pre_alloc_groups = PreAllocGroups.from_folder(
+                    config.fixture_output.pre_alloc_groups_folder_path  # type: ignore[attr-defined]
+                )
+            else:
+                assert hasattr(config, "pre_alloc_groups")
+                pre_alloc_groups = config.pre_alloc_groups  # type: ignore[attr-defined]
+
+            total_groups = len(pre_alloc_groups.root)
+            total_accounts = sum(
+                group.pre_account_count for group in pre_alloc_groups.root.values()
+            )
+
+            terminalreporter.write_sep(
+                "=",
+                f" Phase 1 Complete: Generated {total_groups} pre-allocation groups "
+                f"({total_accounts} total accounts) ",
+                bold=True,
+                green=True,
+            )
+
+        else:
+            # Normal message for fixture generation
+            # append / to indicate this is a directory
+            output_dir = str(config.fixture_output.directory) + "/"  # type: ignore[attr-defined]
+            terminalreporter.write_sep(
+                "=",
+                (
+                    f' No tests executed - the test fixtures in "{output_dir}" may now be '
+                    "executed against a client "
+                ),
+                bold=True,
+                yellow=True,
+            )
 
 
 def pytest_metadata(metadata):
@@ -718,7 +845,6 @@ def base_test_parametrizer(cls: Type[BaseTest]):
         t8n: TransitionTool,
         fork: Fork,
         reference_spec: ReferenceSpec,
-        eips: List[int],
         pre: Alloc,
         output_dir: Path,
         dump_dir_parameter_level: Path | None,
@@ -752,12 +878,58 @@ def base_test_parametrizer(cls: Type[BaseTest]):
                     kwargs["pre"] = pre
                 super(BaseTestWrapper, self).__init__(*args, **kwargs)
                 self._request = request
+
+                # Phase 1: Generate pre-allocation groups
+                if fixture_format is BlockchainEngineXFixture and request.config.getoption(
+                    "generate_pre_alloc_groups"
+                ):
+                    self.update_pre_alloc_groups(
+                        request.config.pre_alloc_groups, fork, request.node.nodeid
+                    )
+                    return  # Skip fixture generation in phase 1
+
+                # Phase 2: Use pre-allocation groups (only for BlockchainEngineXFixture)
+                pre_alloc_hash = None
+                if fixture_format is BlockchainEngineXFixture and request.config.getoption(
+                    "use_pre_alloc_groups"
+                ):
+                    pre_alloc_hash = self.compute_pre_alloc_group_hash(fork=fork)
+                    if pre_alloc_hash not in request.config.pre_alloc_groups:
+                        pre_alloc_path = (
+                            request.config.fixture_output.pre_alloc_groups_folder_path
+                            / pre_alloc_hash
+                        )
+                        raise ValueError(
+                            f"Pre-allocation hash {pre_alloc_hash} not found in "
+                            f"pre-allocation groups. "
+                            f"Please check the pre-allocation groups file at: {pre_alloc_path}. "
+                            "Make sure phase 1 (--generate-pre-alloc-groups) was run "
+                            "before phase 2."
+                        )
+                    group: PreAllocGroup = request.config.pre_alloc_groups[pre_alloc_hash]
+                    self.pre = group.pre
+
                 fixture = self.generate(
                     t8n=t8n,
                     fork=fork,
                     fixture_format=fixture_format,
-                    eips=eips,
                 )
+
+                # Post-process for Engine X format (add pre_hash and state diff)
+                if (
+                    fixture_format is BlockchainEngineXFixture
+                    and request.config.getoption("use_pre_alloc_groups")
+                    and pre_alloc_hash is not None
+                ):
+                    fixture.pre_hash = pre_alloc_hash
+
+                    # Calculate state diff for efficiency
+                    if hasattr(fixture, "post_state") and fixture.post_state is not None:
+                        group = request.config.pre_alloc_groups[pre_alloc_hash]
+                        fixture.post_state_diff = calculate_post_state_diff(
+                            fixture.post_state, group.pre
+                        )
+
                 fixture.fill_info(
                     t8n.version(),
                     test_case_description,
@@ -796,12 +968,47 @@ def pytest_generate_tests(metafunc: pytest.Metafunc):
     """
     for test_type in BaseTest.spec_types.values():
         if test_type.pytest_parameter_name() in metafunc.fixturenames:
+            generate_pre_alloc_groups = metafunc.config.getoption(
+                "generate_pre_alloc_groups", False
+            )
+            use_pre_alloc_groups = metafunc.config.getoption("use_pre_alloc_groups", False)
+
+            if generate_pre_alloc_groups or use_pre_alloc_groups:
+                # When pre-allocation group flags are set, only generate BlockchainEngineXFixture
+                supported_formats = [
+                    format_item
+                    for format_item in test_type.supported_fixture_formats
+                    if (
+                        format_item is BlockchainEngineXFixture
+                        or (
+                            isinstance(format_item, LabeledFixtureFormat)
+                            and format_item.format is BlockchainEngineXFixture
+                        )
+                    )
+                ]
+            else:
+                # Filter out BlockchainEngineXFixture if pre-allocation group flags not set
+                supported_formats = [
+                    format_item
+                    for format_item in test_type.supported_fixture_formats
+                    if not (
+                        format_item is BlockchainEngineXFixture
+                        or (
+                            isinstance(format_item, LabeledFixtureFormat)
+                            and format_item.format is BlockchainEngineXFixture
+                        )
+                    )
+                ]
+
+            parameters = []
+            for i, format_with_or_without_label in enumerate(supported_formats):
+                parameter = labeled_format_parameter_set(format_with_or_without_label)
+                if i > 0:
+                    parameter.marks.append(pytest.mark.derived_test)  # type: ignore
+                parameters.append(parameter)
             metafunc.parametrize(
                 [test_type.pytest_parameter_name()],
-                [
-                    labeled_format_parameter_set(format_with_or_without_label)
-                    for format_with_or_without_label in test_type.supported_fixture_formats
-                ],
+                parameters,
                 scope="function",
                 indirect=True,
             )
@@ -866,14 +1073,24 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int):
     """
     Perform session finish tasks.
 
+    - Save pre-allocation groups (phase 1)
     - Remove any lock files that may have been created.
     - Generate index file for all produced fixtures.
     - Create tarball of the output directory if the output is a tarball.
     """
+    # Save pre-allocation groups after phase 1
+    fixture_output = session.config.fixture_output  # type: ignore[attr-defined]
+    if session.config.getoption("generate_pre_alloc_groups") and hasattr(
+        session.config, "pre_alloc_groups"
+    ):
+        pre_alloc_groups_folder = fixture_output.pre_alloc_groups_folder_path
+        pre_alloc_groups_folder.mkdir(parents=True, exist_ok=True)
+        session.config.pre_alloc_groups.to_folder(pre_alloc_groups_folder)
+        return
+
     if xdist.is_xdist_worker(session):
         return
 
-    fixture_output = session.config.fixture_output  # type: ignore[attr-defined]
     if fixture_output.is_stdout or is_help_or_collectonly_mode(session.config):
         return
 
@@ -882,7 +1099,9 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int):
         file.unlink()
 
     # Generate index file for all produced fixtures.
-    if session.config.getoption("generate_index"):
+    if session.config.getoption("generate_index") and not session.config.getoption(
+        "generate_pre_alloc_groups"
+    ):
         generate_fixtures_index(
             fixture_output.directory, quiet_mode=True, force_flag=False, disable_infer_format=False
         )

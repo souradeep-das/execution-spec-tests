@@ -1,10 +1,11 @@
 """Base test class and helper functions for Ethereum state and blockchain tests."""
 
+import hashlib
 from abc import abstractmethod
 from functools import reduce
 from os import path
 from pathlib import Path
-from typing import Callable, ClassVar, Dict, Generator, List, Optional, Sequence, Type, TypeVar
+from typing import Callable, ClassVar, Dict, Generator, List, Sequence, Type, TypeVar
 
 import pytest
 from pydantic import BaseModel, Field, PrivateAttr
@@ -12,9 +13,15 @@ from pydantic import BaseModel, Field, PrivateAttr
 from ethereum_clis import Result, TransitionTool
 from ethereum_test_base_types import to_hex
 from ethereum_test_execution import BaseExecute, ExecuteFormat, LabeledExecuteFormat
-from ethereum_test_fixtures import BaseFixture, FixtureFormat, LabeledFixtureFormat
+from ethereum_test_fixtures import (
+    BaseFixture,
+    FixtureFormat,
+    LabeledFixtureFormat,
+    PreAllocGroup,
+    PreAllocGroups,
+)
 from ethereum_test_forks import Fork
-from ethereum_test_types import Environment, Withdrawal
+from ethereum_test_types import Alloc, Environment, Withdrawal
 
 
 class HashMismatchExceptionError(Exception):
@@ -115,7 +122,6 @@ class BaseTest(BaseModel):
         t8n: TransitionTool,
         fork: Fork,
         fixture_format: FixtureFormat,
-        eips: Optional[List[int]] = None,
     ) -> BaseFixture:
         """Generate the list of test fixtures."""
         pass
@@ -125,7 +131,6 @@ class BaseTest(BaseModel):
         *,
         fork: Fork,
         execute_format: ExecuteFormat,
-        eips: Optional[List[int]] = None,
     ) -> BaseExecute:
         """Generate the list of test fixtures."""
         raise Exception(f"Unsupported execute format: {execute_format}")
@@ -201,6 +206,83 @@ class BaseTest(BaseModel):
                     "`exception_test` marker. Remove the `@pytest.mark.exception_test` decorator "
                     "from the test."
                 )
+
+    def get_genesis_environment(self, fork: Fork) -> Environment:
+        """
+        Get the genesis environment for pre-allocation groups.
+
+        Must be implemented by subclasses to provide the appropriate environment.
+        """
+        raise NotImplementedError(
+            f"{self.__class__.__name__} must implement genesis environment access for use with "
+            "pre-allocation groups."
+        )
+
+    def update_pre_alloc_groups(
+        self, pre_alloc_groups: PreAllocGroups, fork: Fork, test_id: str
+    ) -> PreAllocGroups:
+        """Create or update the pre-allocation group with the pre from the current spec."""
+        if not hasattr(self, "pre"):
+            raise AttributeError(
+                f"{self.__class__.__name__} does not have a 'pre' field. Pre-allocation groups "
+                "are only supported for test types that define pre-allocation."
+            )
+        pre_alloc_hash = self.compute_pre_alloc_group_hash(fork=fork)
+
+        if pre_alloc_hash in pre_alloc_groups:
+            # Update existing group - just merge pre-allocations
+            group = pre_alloc_groups[pre_alloc_hash]
+            group.pre = Alloc.merge(
+                group.pre,
+                self.pre,
+                allow_key_collision=True,
+            )
+            group.fork = fork
+            group.test_ids.append(str(test_id))
+            group.test_count = len(group.test_ids)
+            group.pre_account_count = len(group.pre.root)
+            pre_alloc_groups[pre_alloc_hash] = group
+        else:
+            # Create new group - use Environment instead of expensive genesis generation
+            group = PreAllocGroup(
+                test_count=1,
+                pre_account_count=len(self.pre.root),
+                test_ids=[str(test_id)],
+                fork=fork,
+                environment=self.get_genesis_environment(fork),
+                pre=self.pre,
+            )
+            pre_alloc_groups[pre_alloc_hash] = group
+        return pre_alloc_groups
+
+    def compute_pre_alloc_group_hash(self, fork: Fork) -> str:
+        """Hash (fork, env) in order to group tests by genesis config."""
+        if not hasattr(self, "pre"):
+            raise AttributeError(
+                f"{self.__class__.__name__} does not have a 'pre' field. Pre-allocation group "
+                "usage is only supported for test types that define pre-allocs."
+            )
+        fork_digest = hashlib.sha256(fork.name().encode("utf-8")).digest()
+        fork_hash = int.from_bytes(fork_digest[:8], byteorder="big")
+        genesis_env = self.get_genesis_environment(fork)
+        combined_hash = fork_hash ^ hash(genesis_env)
+
+        # Check if test has pre_alloc_group marker
+        if self._request is not None and hasattr(self._request, "node"):
+            pre_alloc_group_marker = self._request.node.get_closest_marker("pre_alloc_group")
+            if pre_alloc_group_marker:
+                # Get the group name/salt from marker args
+                if pre_alloc_group_marker.args:
+                    group_salt = str(pre_alloc_group_marker.args[0])
+                    if group_salt == "separate":
+                        # Use nodeid for unique group per test
+                        group_salt = self._request.node.nodeid
+                    # Add custom salt to hash
+                    salt_hash = hashlib.sha256(group_salt.encode("utf-8")).digest()
+                    salt_int = int.from_bytes(salt_hash[:8], byteorder="big")
+                    combined_hash = combined_hash ^ salt_int
+
+        return f"0x{combined_hash:016x}"
 
 
 TestSpec = Callable[[Fork], Generator[BaseTest, None, None]]
