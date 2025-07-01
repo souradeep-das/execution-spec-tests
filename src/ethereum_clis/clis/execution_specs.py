@@ -153,7 +153,7 @@ class ExecutionSpecsExceptionMapper(ExceptionMapper):
         TransactionException.NONCE_MISMATCH_TOO_HIGH: "Failed transaction: NonceMismatchError('nonce too high')",
         TransactionException.NONCE_MISMATCH_TOO_LOW: "Failed transaction: NonceMismatchError('nonce too low')",
         TransactionException.TYPE_3_TX_CONTRACT_CREATION: "Failed transaction: TransactionTypeContractCreationError('transaction type `BlobTransaction` not allowed to create contracts')",
-        TransactionException.NONCE_IS_MAX: "Failed transaction: NonceTooHighError('Nonce too high')",
+        TransactionException.NONCE_IS_MAX: "Failed transaction: NonceOverflowError('Nonce too high')",
         TransactionException.GAS_ALLOWANCE_EXCEEDED: "Failed transaction: GasUsedExceedsLimitError('gas used exceeds limit')",
         BlockException.SYSTEM_CONTRACT_EMPTY: "System contract address",
         BlockException.SYSTEM_CONTRACT_CALL_FAILED: "call failed:",
