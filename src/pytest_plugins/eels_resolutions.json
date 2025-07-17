@@ -1,7 +1,7 @@
 {
     "EELSMaster": {
         "git_url": "https://github.com/ethereum/execution-specs.git",
-        "branch": "master",
+        "branch": "forks/osaka",
         "commit": "7b1694e9a0b7647c6d53d1bddbf96454a875e7fa"
     },
     "Frontier": {
