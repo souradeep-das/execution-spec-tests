@@ -3,7 +3,7 @@
 import time
 from itertools import count
 from pprint import pprint
-from typing import Any, ClassVar, Dict, List, Literal, Union
+from typing import Any, ClassVar, Dict, List, Literal
 
 import requests
 from jwt import encode
@@ -13,6 +13,7 @@ from ethereum_test_base_types import Address, Bytes, Hash, to_json
 from ethereum_test_types import Transaction
 
 from .types import (
+    EthConfigResponse,
     ForkchoiceState,
     ForkchoiceUpdateResponse,
     GetBlobsResponse,
@@ -23,7 +24,7 @@ from .types import (
     TransactionByHashResponse,
 )
 
-BlockNumberType = Union[int, Literal["latest", "earliest", "pending"]]
+BlockNumberType = int | Literal["latest", "earliest", "pending"]
 
 
 class SendTransactionExceptionError(Exception):
@@ -71,7 +72,7 @@ class BaseRPC:
         """Set namespace of the RPC class to the lowercase of the class name."""
         namespace = cls.__name__
         if namespace.endswith("RPC"):
-            namespace = namespace[:-3]
+            namespace = namespace.removesuffix("RPC")
         cls.namespace = namespace.lower()
 
     def post_request(self, method: str, *params: Any, extra_headers: Dict | None = None) -> Any:
@@ -111,7 +112,7 @@ class EthRPC(BaseRPC):
 
     transaction_wait_timeout: int = 60
 
-    BlockNumberType = Union[int, Literal["latest", "earliest", "pending"]]
+    BlockNumberType = int | Literal["latest", "earliest", "pending"]
 
     def __init__(
         self,
@@ -128,6 +129,23 @@ class EthRPC(BaseRPC):
             url, extra_headers, response_validation_context=response_validation_context
         )
         self.transaction_wait_timeout = transaction_wait_timeout
+
+    def config(self):
+        """`eth_config`: Returns information about a fork configuration of the client."""
+        try:
+            response = self.post_request("config")
+            if response is None:
+                return None
+            return EthConfigResponse.model_validate(
+                response, context=self.response_validation_context
+            )
+        except ValidationError as e:
+            pprint(e.errors())
+            raise e
+
+    def chain_id(self) -> int:
+        """`eth_chainId`: Returns the current chain id."""
+        return int(self.post_request("chainId"), 16)
 
     def get_block_by_number(self, block_number: BlockNumberType = "latest", full_txs: bool = True):
         """`eth_getBlockByNumber`: Returns information about a block by block number."""

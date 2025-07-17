@@ -13,15 +13,17 @@ from .base import ArgumentProcessor
 class HelpFlagsProcessor(ArgumentProcessor):
     """Processes help-related flags to provide cleaner help output."""
 
-    def __init__(self, command_type: str):
+    def __init__(self, command_type: str, required_args: List[str] | None = None):
         """
         Initialize the help processor.
 
         Args:
             command_type: The type of command (e.g., "fill", "consume", "execute")
+            required_args: The arguments that are required for the command to run
 
         """
         self.command_type = command_type
+        self.required_args = required_args or []
 
     def process_args(self, args: List[str]) -> List[str]:
         """
@@ -33,7 +35,8 @@ class HelpFlagsProcessor(ArgumentProcessor):
         ctx = click.get_current_context()
 
         if ctx.params.get("help_flag"):
-            return [f"--{self.command_type}-help"]
+            # And also add the required arguments to the help output
+            return [f"--{self.command_type}-help"] + self.required_args
         elif ctx.params.get("pytest_help_flag"):
             return ["--help"]
 
@@ -74,6 +77,10 @@ class StdoutFlagsProcessor(ArgumentProcessor):
 class HiveEnvironmentProcessor(ArgumentProcessor):
     """Processes Hive environment variables for consume commands."""
 
+    def __init__(self, command_name: str):
+        """Initialize the processor with command name to determine plugin."""
+        self.command_name = command_name
+
     def process_args(self, args: List[str]) -> List[str]:
         """Convert hive environment variables into pytest flags."""
         modified_args = args[:]
@@ -92,8 +99,12 @@ class HiveEnvironmentProcessor(ArgumentProcessor):
         if os.getenv("HIVE_LOGLEVEL") is not None:
             warnings.warn("HIVE_LOG_LEVEL is not yet supported.", stacklevel=2)
 
-        modified_args.extend(["-p", "pytest_plugins.pytest_hive.pytest_hive"])
-
+        if self.command_name == "engine":
+            modified_args.extend(["-p", "pytest_plugins.consume.simulators.engine.conftest"])
+        elif self.command_name == "rlp":
+            modified_args.extend(["-p", "pytest_plugins.consume.simulators.rlp.conftest"])
+        else:
+            raise ValueError(f"Unknown command name: {self.command_name}")
         return modified_args
 
     def _has_regex_or_sim_limit(self, args: List[str]) -> bool:

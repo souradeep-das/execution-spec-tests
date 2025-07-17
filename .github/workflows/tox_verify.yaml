@@ -1,6 +1,14 @@
 name: Tox
 
-on: [push, pull_request, workflow_dispatch]
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
 
 jobs:
   lint:
@@ -75,7 +83,7 @@ jobs:
     steps:
       - name: Checkout ethereum/execution-spec-tests
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
-      - uses: DavidAnson/markdownlint-cli2-action@b4c9feab76d8025d1e83c653fa3990936df0e6c8
+      - uses: DavidAnson/markdownlint-cli2-action@05f32210e84442804257b2a6f20b273450ec8265
         with:
           globs: |
             README.md
@@ -103,8 +111,6 @@ jobs:
     strategy:
       matrix:
         include:
-          - os: ubuntu-latest
-            python: "3.10"
           - os: macos-latest
             python: "3.11"
           - os: ubuntu-latest
@@ -116,10 +122,8 @@ jobs:
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           repository: ethereum/execution-specs
-          ref: fa847a0e48309debee8edc510ceddb2fd5db2f2e
+          ref: e13d33ab21ef1fdd2f073c96a3346e23eb7727f6
           path: execution-specs
-          sparse-checkout: |
-            src/ethereum
           fetch-depth: 1
       - name: Install uv ${{ vars.UV_VERSION }} and python ${{ matrix.python }}
         uses: astral-sh/setup-uv@0c5e2b8115b80b4c7c5ddf6ffdd634974642d182
@@ -134,23 +138,25 @@ jobs:
           targets: "evmone-t8n"
       - name: Build GETH EVM
         uses: ./.github/actions/build-evm-client/geth
+      - name: Update eels_resolutions.json
+        run: |
+          sed -i -e "s|\$GITHUB_WORKSPACE|${GITHUB_WORKSPACE}|g" .github/configs/eels_resolutions.json
       - name: Run tox - run framework unit tests with pytest
         env:
           EELS_RESOLUTIONS_FILE: ${{ github.workspace }}/.github/configs/eels_resolutions.json
         run: uvx --with=tox-uv tox -e pytest
 
   tests_deployed:
-    name: Fill tests, deployed, ${{ matrix.os }}, ${{ matrix.python }}
+    name: Fill tests, deployed, ${{ matrix.name }}, ${{ matrix.python }}
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
         include:
-          # Still getting requests.exceptions.ReadTimeout: UnixHTTPConnectionPool() in CI, even with local EELS
-          # - os: ubuntu-latest
-          #  python: "3.10"
-          - os: ubuntu-latest
+          - os: [self-hosted-ghr, size-xl-x64]
+            name: self-hosted-ghr-xl-x64
             python: "3.11"
           - os: macos-latest
+            name: macos-latest
             python: "3.12"
     steps:
       - name: Checkout ethereum/execution-spec-tests
@@ -159,10 +165,8 @@ jobs:
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           repository: ethereum/execution-specs
-          ref: fa847a0e48309debee8edc510ceddb2fd5db2f2e
+          ref: e13d33ab21ef1fdd2f073c96a3346e23eb7727f6
           path: execution-specs
-          sparse-checkout: |
-            src/ethereum
           fetch-depth: 1
       - name: Install uv ${{ vars.UV_VERSION }} and python ${{ matrix.python }}
         uses: astral-sh/setup-uv@0c5e2b8115b80b4c7c5ddf6ffdd634974642d182
@@ -171,19 +175,19 @@ jobs:
           cache-dependency-glob: "uv.lock"
           version: ${{ vars.UV_VERSION }}
           python-version: ${{ matrix.python }}
+      - name: Update eels_resolutions.json
+        run: |
+          sed -i -e "s|\$GITHUB_WORKSPACE|${GITHUB_WORKSPACE}|g" .github/configs/eels_resolutions.json
       - name: Run tox - fill tests for deployed forks
         env:
           EELS_RESOLUTIONS_FILE: ${{ github.workspace }}/.github/configs/eels_resolutions.json
         run: uvx --with=tox-uv tox -e tests-deployed
-  tests_deployed_zkevm:
-    name: Fill zkEVM test cases, deployed, ${{ matrix.os }}, ${{ matrix.python }}
+  tests_deployed_benchmark:
+    name: Fill benchmark test cases, deployed, ${{ matrix.os }}, ${{ matrix.python }}
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
         include:
-          # Still getting requests.exceptions.ReadTimeout: UnixHTTPConnectionPool() in CI, even with local EELS
-          # - os: ubuntu-latest
-          #  python: "3.10"
           - os: ubuntu-latest
             python: "3.11"
           - os: macos-latest
@@ -205,4 +209,4 @@ jobs:
       - name: Run tox - fill tests for deployed forks
         env:
           EELS_RESOLUTIONS_FILE: ${{ github.workspace }}/.github/configs/eels_resolutions.json
-        run: uvx --with=tox-uv tox -e tests-deployed-zkevm
+        run: uvx --with=tox-uv tox -e tests-deployed-benchmark

@@ -1,10 +1,12 @@
 # Execution Spec Tests
 
 [![latest version](https://img.shields.io/github/v/release/ethereum/execution-spec-tests)](https://github.com/ethereum/execution-spec-tests/releases/latest)
-![Python Versions](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12%20%7C%203.13-blue)
+![Python Versions](https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13-blue)
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 [![uv](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/uv/main/assets/badge/v0.json)](https://github.com/astral-sh/uv)
 [![License](https://img.shields.io/github/license/ethereum/execution-spec-tests)](https://github.com/ethereum/execution-spec-tests/blob/main/LICENSE)
+
+The full execution-spec-tests documentation can be found [here](https://eest.ethereum.org/main/).
 
 [ethereum/execution-spec-tests](https://github.com/ethereum/execution-spec-tests) is both a collection of test cases and a framework implemented in Python to generate tests for Ethereum execution clients.
 
@@ -83,7 +85,7 @@ All current tags, their t8n implementation and branch they point to, are listed 
 
 ### Prerequisites
 
-The tools provided by ethereum/execution-spec-tests use `uv` ([docs.astral.sh/uv](https://docs.astral.sh/uv/)) to manage their dependencies and virtual environment. `uv` downloads Python for your target platform if one of the required versions (Python 3.10, 3.11 or 3.12) is not available natively.
+The tools provided by ethereum/execution-spec-tests use `uv` ([docs.astral.sh/uv](https://docs.astral.sh/uv/)) to manage their dependencies and virtual environment. `uv` downloads Python for your target platform if one of the required versions (Python 3.11 or 3.12) is not available natively.
 
 `uv` can be installed via curl (recommended; can self-update):
 
@@ -107,7 +109,6 @@ cd execution-spec-tests
 uv python install 3.11
 uv python pin 3.11
 uv sync --all-extras
-uv run solc-select use 0.8.24 --always-install
 ```
 
 See [Installation Troubleshooting](https://eest.ethereum.org/main/getting_started/installation_troubleshooting/) in the online docs if you encounter issues.

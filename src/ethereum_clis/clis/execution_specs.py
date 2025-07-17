@@ -14,7 +14,6 @@ from typing import ClassVar, Dict, List, Optional
 
 from ethereum_test_exceptions import (
     BlockException,
-    EOFException,
     ExceptionBase,
     ExceptionMapper,
     TransactionException,
@@ -47,12 +46,14 @@ class ExecutionSpecsTransitionTool(TransitionTool):
     detect_binary_pattern = re.compile(r"^ethereum-spec-evm-resolver\b")
     t8n_use_server: bool = True
     server_dir: Optional[TemporaryDirectory] = None
+    server_url: str | None = None
 
     def __init__(
         self,
         *,
         binary: Optional[Path] = None,
         trace: bool = False,
+        server_url: str | None = None,
     ):
         """Initialize the Ethereum Specs EVM Resolver Transition Tool interface."""
         os.environ.setdefault("NO_PROXY", "*")  # Disable proxy for local connections
@@ -72,6 +73,7 @@ class ExecutionSpecsTransitionTool(TransitionTool):
                 f"Unexpected exception calling ethereum-spec-evm-resolver: {e}."
             ) from e
         self.help_string = result.stdout
+        self.server_url = server_url
 
     def start_server(self):
         """
@@ -141,7 +143,9 @@ class ExecutionSpecsExceptionMapper(ExceptionMapper):
         TransactionException.TYPE_3_TX_PRE_FORK: (
             "module 'ethereum.shanghai.transactions' has no attribute 'BlobTransaction'"
         ),
-        TransactionException.TYPE_4_TX_PRE_FORK: "Unknown transaction type: 0x4",
+        TransactionException.TYPE_4_TX_PRE_FORK: (
+            "'ethereum.cancun.transactions' has no attribute 'SetCodeTransaction'"
+        ),
         TransactionException.TYPE_3_TX_INVALID_BLOB_VERSIONED_HASH: "Failed transaction: InvalidBlobVersionedHashError('invalid blob versioned hash')",
         # This message is the same as TYPE_3_TX_MAX_BLOB_GAS_ALLOWANCE_EXCEEDED
         TransactionException.TYPE_3_TX_BLOB_COUNT_EXCEEDED: "Failed transaction: BlobGasLimitExceededError('blob gas limit exceeded')",
@@ -158,45 +162,5 @@ class ExecutionSpecsExceptionMapper(ExceptionMapper):
         BlockException.SYSTEM_CONTRACT_EMPTY: "System contract address",
         BlockException.SYSTEM_CONTRACT_CALL_FAILED: "call failed:",
         BlockException.INVALID_DEPOSIT_EVENT_LAYOUT: "deposit",
-        # TODO EVMONE needs to differentiate when the section is missing in the header or body
-        EOFException.MISSING_STOP_OPCODE: "err: no_terminating_instruction",
-        EOFException.MISSING_CODE_HEADER: "err: code_section_missing",
-        EOFException.MISSING_TYPE_HEADER: "err: type_section_missing",
-        # TODO EVMONE these exceptions are too similar, this leeds to ambiguity
-        EOFException.MISSING_TERMINATOR: "err: header_terminator_missing",
-        EOFException.MISSING_HEADERS_TERMINATOR: "err: section_headers_not_terminated",
-        EOFException.INVALID_VERSION: "err: eof_version_unknown",
-        EOFException.INVALID_NON_RETURNING_FLAG: "err: invalid_non_returning_flag",
-        EOFException.INVALID_MAGIC: "err: invalid_prefix",
-        EOFException.INVALID_FIRST_SECTION_TYPE: "err: invalid_first_section_type",
-        EOFException.INVALID_SECTION_BODIES_SIZE: "err: invalid_section_bodies_size",
-        EOFException.INVALID_TYPE_SECTION_SIZE: "err: invalid_type_section_size",
-        EOFException.INCOMPLETE_SECTION_SIZE: "err: incomplete_section_size",
-        EOFException.INCOMPLETE_SECTION_NUMBER: "err: incomplete_section_number",
-        EOFException.TOO_MANY_CODE_SECTIONS: "err: too_many_code_sections",
-        EOFException.ZERO_SECTION_SIZE: "err: zero_section_size",
-        EOFException.MISSING_DATA_SECTION: "err: data_section_missing",
-        EOFException.UNDEFINED_INSTRUCTION: "err: undefined_instruction",
-        EOFException.INPUTS_OUTPUTS_NUM_ABOVE_LIMIT: "err: inputs_outputs_num_above_limit",
-        EOFException.UNREACHABLE_INSTRUCTIONS: "err: unreachable_instructions",
-        EOFException.INVALID_RJUMP_DESTINATION: "err: invalid_rjump_destination",
-        EOFException.UNREACHABLE_CODE_SECTIONS: "err: unreachable_code_sections",
-        EOFException.STACK_UNDERFLOW: "err: stack_underflow",
-        EOFException.MAX_STACK_INCREASE_ABOVE_LIMIT: "err: max_stack_increase_above_limit",
-        EOFException.STACK_HIGHER_THAN_OUTPUTS: "err: stack_higher_than_outputs_required",
-        EOFException.JUMPF_DESTINATION_INCOMPATIBLE_OUTPUTS: (
-            "err: jumpf_destination_incompatible_outputs"
-        ),
-        EOFException.INVALID_MAX_STACK_INCREASE: "err: invalid_max_stack_increase",
-        EOFException.INVALID_DATALOADN_INDEX: "err: invalid_dataloadn_index",
-        EOFException.TRUNCATED_INSTRUCTION: "err: truncated_instruction",
-        EOFException.TOPLEVEL_CONTAINER_TRUNCATED: "err: toplevel_container_truncated",
-        EOFException.ORPHAN_SUBCONTAINER: "err: unreferenced_subcontainer",
-        EOFException.CONTAINER_SIZE_ABOVE_LIMIT: "err: container_size_above_limit",
-        EOFException.INVALID_CONTAINER_SECTION_INDEX: "err: invalid_container_section_index",
-        EOFException.INCOMPATIBLE_CONTAINER_KIND: "err: incompatible_container_kind",
-        EOFException.STACK_HEIGHT_MISMATCH: "err: stack_height_mismatch",
-        EOFException.TOO_MANY_CONTAINERS: "err: too_many_container_sections",
-        EOFException.INVALID_CODE_SECTION_INDEX: "err: invalid_code_section_index",
     }
     mapping_regex: ClassVar[Dict[ExceptionBase, str]] = {}

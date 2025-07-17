@@ -361,8 +361,7 @@ class NethermindExceptionMapper(ExceptionMapper):
             "ExceededGasLimit: Gas used exceeds gas limit."
         ),
         BlockException.RLP_BLOCK_LIMIT_EXCEEDED: (
-            # TODO:
-            ""
+            "ExceededBlockSizeLimit: Exceeded block size limit"
         ),
         BlockException.INVALID_DEPOSIT_EVENT_LAYOUT: (
             "DepositsInvalid: Invalid deposit event layout:"
@@ -392,9 +391,9 @@ class NethermindExceptionMapper(ExceptionMapper):
             r"Invalid block hash 0x[0-9a-f]+ does not match calculated hash 0x[0-9a-f]+"
         ),
         BlockException.SYSTEM_CONTRACT_EMPTY: (
-            r"(Withdrawals|Consolidations)Empty\: Contract is not deployed\."
+            r"(Withdrawals|Consolidations)Empty: Contract is not deployed\."
         ),
         BlockException.SYSTEM_CONTRACT_CALL_FAILED: (
-            r"(Withdrawals|Consolidations)Failed\: Contract execution failed\."
+            r"(Withdrawals|Consolidations)Failed: Contract execution failed\."
         ),
     }
